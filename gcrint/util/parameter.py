@@ -36,7 +36,7 @@ def get_args():
     parser.add_argument('--imp_batch_size', type=int, default=128)
     parser.add_argument('--val_batch_size', type=int, default=128)
     parser.add_argument('--test_batch_size', type=int, default=1)
-    parser.add_argument('--num_epoch', type=int, default=300)
+    parser.add_argument('--num_epoch', type=int, default=200)
     parser.add_argument('--device', type=str, default='cuda:0')
     parser.add_argument('--loss_fn', type=str, default='mae', choices=['mse', 'mae', 'mse_u', 'mae_u'])
     parser.add_argument('--lamda', type=float, default=2.0)
