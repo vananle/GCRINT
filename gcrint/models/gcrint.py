@@ -1,3 +1,5 @@
+from typing import List
+
 import torch
 
 
@@ -56,18 +58,17 @@ class GCRINT(torch.nn.Module):
                                                 out_channels=self.residual_channels,
                                                 kernel_size=(1, 1))
 
-        self.lstm_cell_fw = torch.nn.ModuleList(
-            [torch.nn.LSTMCell(input_size=self.residual_channels * self.nSeries,
-                               hidden_size=self.lstm_hidden * self.nSeries, bias=True)
-             for l in range(self.num_layers)])
+        self.lstm_1_fw = torch.nn.LSTM(input_size=self.residual_channels, batch_first=True,
+                                       hidden_size=self.lstm_hidden, bias=True)
+
+        self.lstm_fw = torch.nn.ModuleList(
+            [torch.nn.LSTM(input_size=self.residual_channels, batch_first=True,
+                           hidden_size=self.lstm_hidden, bias=True, bidirectional=True)
+             for _ in range(1, self.num_layers, 1)])
 
         # onnly first layer has backward LSTM
-        self.lstm_cell_bw = torch.nn.LSTMCell(input_size=self.residual_channels * self.nSeries,
-                                              hidden_size=self.lstm_hidden * self.nSeries, bias=True)
-
-        self.linear_lstm = torch.nn.ModuleList(
-            [torch.nn.Linear(in_features=self.lstm_hidden * self.nSeries, out_features=self.nSeries, bias=True)
-             for _ in range(self.num_layers)])
+        self.lstm_1_bw = torch.nn.LSTM(input_size=self.residual_channels, batch_first=True,
+                                       hidden_size=self.lstm_hidden, bias=True)
 
         self.supports_len = len(self.fixed_supports)
         nodevecs = torch.randn(self.nSeries, self.apt_size), torch.randn(self.apt_size, self.nSeries)
@@ -86,30 +87,23 @@ class GCRINT(torch.nn.Module):
 
         self.final_linear_out_1 = torch.nn.Linear(in_features=3 * self.nSeries,
                                                   out_features=128)
-        # self.final_linear_out_1 = torch.nn.Linear(in_features=2 * self.nSeries,
-        #                                           out_features=128)
         self.final_linear_out_2 = torch.nn.Linear(in_features=128,
                                                   out_features=self.nSeries)
 
     def lstm_layer(self, x, cell):
-        # input x [bs, rc*n, s]
-        len = x.size(2)
-
-        h = torch.autograd.Variable(torch.zeros((x.size(0), self.lstm_hidden * self.nSeries)))
-        c = torch.autograd.Variable(torch.zeros((x.size(0), self.lstm_hidden * self.nSeries)))
-
-        if torch.cuda.is_available():
-            h, c = h.to(self.device), c.to(self.device)
-
+        # input x [bs, rc, n, s]
+        # output (torch) [bs, hidden, n, s]
+        x = x.transpose(1, 3)  # [bs, s, n, rc]
+        futures: List[torch.jit.Future[torch.Tensor]] = []
+        for k in range(self.nSeries):
+            futures.append(torch.jit.fork(cell, x[:, :, k, :]))
         outputs = []
+        for future in futures:
+            outputs.append(torch.jit.wait(future)[0])
 
-        for i in range(len):
-            _in = x[..., i]
-            h, c = cell(_in, (h, c))
-
-            outputs.append(h)
-
-        return outputs
+        outputs = torch.stack(outputs, dim=2)  # [b, sq, n, h]
+        outputs = outputs.transpose(1, 3)  # [bs, hidden, n, s]
+        return outputs  # [bs, hidden, n, s]
 
     def feature_concat(self, input_tensor, mask):
         x = torch.stack([input_tensor, mask], dim=1)  # [b, 2, s, n]
@@ -145,38 +139,34 @@ class GCRINT(torch.nn.Module):
         if self.verbose:
             print('Adjmx: ', adjacency_matrices[0].shape)
 
-        in_y = y
         outputs = 0
         for l in range(self.num_layers):
 
-            in_lstm = x.reshape(x.size(0), -1, x.size(3))  # [b, rc*n, s]
+            in_lstm = x  # [b, rc, n, s]  for forward lstm and layer 2,3,... lstm
             len = in_lstm.size(2)
 
             if self.verbose:
                 print('layer {} input = {}'.format(l, in_lstm.shape))
 
-            gcn_in = self.lstm_layer(in_lstm, self.lstm_cell_fw[l])  # fw lstm
-            gcn_in = torch.stack(gcn_in, dim=-1)  # [b, n*h, len]
-
             if l == 0:
-                in_lstm_bw = x_bw.reshape(x_bw.size(0), -1, x_bw.size(3))  # [b, rc*n, s]
+                gcn_in = self.lstm_layer(in_lstm, self.lstm_1_fw)  # fw lstm
 
-                gcn_in_bw = self.lstm_layer(in_lstm_bw, self.lstm_cell_bw)  # bw lstm layer
-                gcn_in_bw = torch.stack(gcn_in_bw, dim=-1)  # [b, n*h, len]     bw outputs
+                in_lstm_bw = x_bw  # [b, rc, n, s]
+                gcn_in_bw = self.lstm_layer(in_lstm_bw, self.lstm_1_bw)  # bw lstm layer
                 gcn_in_bw = torch.flip(gcn_in_bw, dims=[-1])  # flip bw output
 
                 # c_loss = torch.abs(gcn_in - gcn_in_bw).mean() * 1e-1            # consistency loss
-
                 gcn_in = (gcn_in + gcn_in_bw) / 2.0  # combine 2 outputs
 
-            gcn_in = gcn_in.reshape(-1, self.lstm_hidden, self.nSeries, len)
+            else:
+                gcn_in = self.lstm_layer(in_lstm, self.lstm_fw[l - 1])  # fw lstm
 
             gcn_in = torch.tanh(gcn_in)
 
             if self.verbose:
                 print('gcn in = ', gcn_in.shape)
 
-            graph_out = self.graph_convs[l](gcn_in, adjacency_matrices)  # [b, rc, n, len]
+            graph_out = self.graph_convs[l](gcn_in, adjacency_matrices)  # [b, rc, n, seqlen]
             if self.verbose:
                 print('gcn out = ', graph_out.shape)
 
