@@ -75,7 +75,7 @@ class GCRINT(torch.nn.Module):
         self.nodevec1, self.nodevec2 = [torch.nn.Parameter(n.to(self.device), requires_grad=True) for n in nodevecs]
 
         self.graph_convs = torch.nn.ModuleList(
-            [GraphConvNet(self.lstm_hidden, self.residual_channels, self.dropout, support_len=self.supports_len)
+            [GraphConvNet(self.lstm_hidden * 2, self.residual_channels, self.dropout, support_len=self.supports_len)
              for _ in range(self.num_layers)])
         self.bn = torch.nn.ModuleList([torch.nn.BatchNorm2d(self.residual_channels) for _ in range(self.num_layers)])
 
