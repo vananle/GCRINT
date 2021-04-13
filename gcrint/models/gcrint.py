@@ -33,15 +33,14 @@ class GraphConvNet(torch.nn.Module):
 
 
 class GCRINT(torch.nn.Module):
+
     def __init__(self, args):
         super(GCRINT, self).__init__()
 
         self.seq_len = args.seq_len - 2
         self.nSeries = args.nSeries
-        # self.nNodes = args.nNodes
         self.lstm_hidden = args.lstm_hidden
         self.gcn_indim = args.gcn_indim
-        # self.gcn_hidden = args.gcn_hidden
         self.dropout = args.dropout
         self.num_layers = args.num_layers
         self.device = args.device
@@ -66,7 +65,7 @@ class GCRINT(torch.nn.Module):
                            hidden_size=self.lstm_hidden, bias=True, bidirectional=True)
              for _ in range(1, self.num_layers, 1)])
 
-        # onnly first layer has backward LSTM
+        # only first layer has backward LSTM
         self.lstm_1_bw = torch.nn.LSTM(input_size=self.residual_channels, batch_first=True,
                                        hidden_size=self.lstm_hidden, bias=True)
 
