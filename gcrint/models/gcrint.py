@@ -139,33 +139,30 @@ class GCRINT(torch.nn.Module):
             print('Adjmx: ', adjacency_matrices[0].shape)
 
         outputs = 0
-        for l in range(self.num_layers):
+        for layer in range(self.num_layers):
 
             in_lstm = x  # [b, rc, n, s]  for forward lstm and layer 2,3,... lstm
-            len = in_lstm.size(2)
+            seqlen = in_lstm.size(2)
 
             if self.verbose:
-                print('layer {} input = {}'.format(l, in_lstm.shape))
+                print('layer {} input = {}'.format(layer, in_lstm.shape))
 
-            if l == 0:
+            if layer == 0:
                 gcn_in = self.lstm_layer(in_lstm, self.lstm_1_fw)  # fw lstm
-
                 in_lstm_bw = x_bw  # [b, rc, n, s]
                 gcn_in_bw = self.lstm_layer(in_lstm_bw, self.lstm_1_bw)  # bw lstm layer
                 gcn_in_bw = torch.flip(gcn_in_bw, dims=[-1])  # flip bw output
-
-                # c_loss = torch.abs(gcn_in - gcn_in_bw).mean() * 1e-1            # consistency loss
-                gcn_in = (gcn_in + gcn_in_bw) / 2.0  # combine 2 outputs
+                gcn_in = torch.cat([gcn_in, gcn_in_bw], dim=1)  # combine 2 outputs
 
             else:
-                gcn_in = self.lstm_layer(in_lstm, self.lstm_fw[l - 1])  # fw lstm
+                gcn_in = self.lstm_layer(in_lstm, self.lstm_fw[layer - 1])  # fw lstm
 
             gcn_in = torch.tanh(gcn_in)
 
             if self.verbose:
                 print('gcn in = ', gcn_in.shape)
 
-            graph_out = self.graph_convs[l](gcn_in, adjacency_matrices)  # [b, rc, n, seqlen]
+            graph_out = self.graph_convs[layer](gcn_in, adjacency_matrices)  # [b, rc, n, seqlen]
             if self.verbose:
                 print('gcn out = ', graph_out.shape)
 
@@ -179,9 +176,8 @@ class GCRINT(torch.nn.Module):
                 print('skip outputs = ', outputs.shape)
 
             x = graph_out
-            x = x[..., 0:len:2]  # [b, rc, n, s/2 ]
-            # in_y = in_y[..., 0:len:2]  # [b, rc, n, s/2 ]
-            x = self.bn[l](x)
+            x = x[..., 0:seqlen:2]  # [b, rc, n, s/2 ]
+            x = self.bn[layer](x)
 
             if self.verbose:
                 print('---------------------------------')
